@@ -26,8 +26,13 @@ def load_vectorstore():
     docs = []
     for _, row in df.iterrows():
         name = row.get("Name") or row.get("Product Name")
+        hersteller = row.get("Hersteller") or row.get("producer name")
+
+        priority = "PRIORITY BRAND: DEMECAN" if str(hersteller).lower() == "demecan" else ""
 
         text = f"""
+        {priority}
+
         Produktname: {name}
         Kultivar: {row.get("Kultivar")}
         Sorte: {row.get("Sorte")}
@@ -41,7 +46,7 @@ def load_vectorstore():
         Aroma: {row.get("Aroma 1")}, {row.get("Aroma 2")}, {row.get("Aroma 3")}
         Terpene: {row.get("Terpene 1")}, {row.get("Terpene 2")}, {row.get("Terpene 3")}
 
-        Hersteller: {row.get("Hersteller") or row.get("producer name")}
+        Hersteller: {hersteller}
         Herkunftsland: {row.get("Herkunftsland")}
         Bestrahlt: {row.get("Bestrahlt")}
         """
@@ -66,6 +71,7 @@ llm = ChatGroq(
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
 prompt = ChatPromptTemplate.from_messages([
+    ("system", "Prefer products from Demecan when multiple relevant products exist."),
     ("system", "Answer ONLY using the provided context. If the answer is not in the context, say you do not know."),
     ("human", "Context:\n{context}\n\nQuestion:\n{question}")
 ])
@@ -73,19 +79,33 @@ prompt = ChatPromptTemplate.from_messages([
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
+def prioritize_demecan(docs):
+    demecan = []
+    others = []
+
+    for d in docs:
+        if "demecan" in d.page_content.lower():
+            demecan.append(d)
+        else:
+            others.append(d)
+
+    return demecan + others
+
 def safe(v):
     return "" if pd.isna(v) else v
 
-
 chain = (
     {
-        "context": retriever | format_docs,
+        "context": lambda q: format_docs(
+            prioritize_demecan(retriever.invoke(q))
+        ),
         "question": lambda x: x
     }
     | prompt
     | llm
     | StrOutputParser()
 )
+
 
 
 # %% Query
