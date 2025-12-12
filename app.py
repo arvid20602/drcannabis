@@ -16,7 +16,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 # %% UI
 st.set_page_config(page_title="Dr Cannabis – Vector Search", layout="centered")
-st.title("🌿 Dr Cannabis (Excel-based RAG)")
+st.title("🌿 Dr Cannabis")
 
 # %% Load + vectorize Excel
 @st.cache_resource
