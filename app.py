@@ -9,8 +9,10 @@ import streamlit as st
 from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.schema import Document
-from langchain.chains import RetrievalQA
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
 
 # %% UI
 st.set_page_config(page_title="Dr Cannabis – Vector Search", layout="centered")
@@ -61,19 +63,37 @@ llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
 )
 
-# %% RAG chain
-qa = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
-    chain_type="stuff",
+retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer ONLY using the provided context. If the answer is not in the context, say you do not know."),
+    ("human", "Context:\n{context}\n\nQuestion:\n{question}")
+])
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+def safe(v):
+    return "" if pd.isna(v) else v
+
+
+chain = (
+    {
+        "context": retriever | format_docs,
+        "question": lambda x: x
+    }
+    | prompt
+    | llm
+    | StrOutputParser()
 )
+
 
 # %% Query
 question = st.text_input("Ask about strains, effects, THC/CBD, medical use")
 
 if question:
     with st.spinner("Searching vector database..."):
-        answer = qa.run(question)
+        answer = chain.invoke(question)
 
     st.subheader("Answer")
     st.write(answer)
