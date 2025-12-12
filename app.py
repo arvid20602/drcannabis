@@ -16,23 +16,27 @@ from langchain_core.output_parsers import StrOutputParser
 
 # %% UI
 st.set_page_config(page_title="Dr Cannabis", layout="centered")
-st.title("🌿 Dr Cannabis")
+st.title("🍃 Dr Cannabis")
 
 
 # %% Helpers
 def safe(v):
-    return "" if pd.isna(v) else v
+    return "" if pd.isna(v) else str(v)
 
 
-# %% Load + vectorize Excel
+# %% Load + vectorize Excel (TWO STORES)
 @st.cache_resource
-def load_vectorstore():
+def load_vectorstores():
     df = pd.read_excel("Stammdata.xlsx")
 
-    docs = []
+    demecan_docs = []
+    all_docs = []
+
     for _, row in df.iterrows():
         name = safe(row.get("Name")) or safe(row.get("Product Name"))
-        hersteller = safe(row.get("Hersteller")) or safe(row.get("producer name"))
+
+        raw_hersteller = safe(row.get("Hersteller")) or safe(row.get("producer name"))
+        hersteller_norm = raw_hersteller.lower().strip()
 
         text = f"""
         Produktname: {name}
@@ -48,28 +52,28 @@ def load_vectorstore():
         Aroma: {safe(row.get("Aroma 1"))}, {safe(row.get("Aroma 2"))}, {safe(row.get("Aroma 3"))}
         Terpene: {safe(row.get("Terpene 1"))}, {safe(row.get("Terpene 2"))}, {safe(row.get("Terpene 3"))}
 
-        Hersteller: {hersteller}
+        Hersteller: {raw_hersteller}
         Herkunftsland: {safe(row.get("Herkunftsland"))}
         Bestrahlt: {safe(row.get("Bestrahlt"))}
         """
 
-        docs.append(
-            Document(
-                page_content=text,
-                metadata={
-                    "manufacturer": hersteller.lower()
-                }
-            )
-        )
+        doc = Document(page_content=text)
+        all_docs.append(doc)
+
+        if "demecan" in hersteller_norm:
+            demecan_docs.append(doc)
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    return FAISS.from_documents(docs, embeddings)
+    demecan_store = FAISS.from_documents(demecan_docs, embeddings)
+    general_store = FAISS.from_documents(all_docs, embeddings)
+
+    return demecan_store, general_store
 
 
-vectorstore = load_vectorstore()
+demecan_store, general_store = load_vectorstores()
 
 
 # %% LLM
@@ -80,30 +84,18 @@ llm = ChatGroq(
 )
 
 
-# %% Retrievers (KEY PART)
-demecan_retriever = vectorstore.as_retriever(
-    search_kwargs={
-        "k": 4,
-        "filter": {"manufacturer": "demecan"}
-    }
-)
-
-general_retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-
-
+# %% Retrieval logic (DETERMINISTIC)
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
 def get_context(question: str) -> str:
-    demecan_docs = demecan_retriever.invoke(question)
+    demecan_hits = demecan_store.similarity_search(question, k=2)
 
-    if len(demecan_docs) >= 1:
-        docs = demecan_docs
-    else:
-        docs = general_retriever.invoke(question)
+    if demecan_hits:
+        return format_docs(demecan_hits)
 
-    return format_docs(docs)
+    return format_docs(general_store.similarity_search(question, k=4))
 
 
 # %% Prompt
