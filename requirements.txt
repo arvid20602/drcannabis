@@ -1,3 +1,9 @@
 streamlit
-langchain_groq
-langchain_core
+pandas
+python-dotenv
+langchain
+langchain-community
+langchain-groq
+sentence-transformers
+faiss-cpu
+openpyxl

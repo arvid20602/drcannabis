@@ -1,62 +1,79 @@
-#%% Load env
+# %% env
+from dotenv import load_dotenv
+load_dotenv()
 
 import os
+import pandas as pd
 import streamlit as st
+
 from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.schema import Document
+from langchain.chains import RetrievalQA
 
-#%% Streamlit UI
-st.title("🌿 Dr Cannabis")
-st.write("Ask factual questions about cannabis strains, effects, and medical use.")
+# %% UI
+st.set_page_config(page_title="Dr Cannabis – Vector Search", layout="centered")
+st.title("🌿 Dr Cannabis (Excel-based RAG)")
 
-#%% LLM
-MODEL_NAME = "openai/gpt-oss-20b"
+# %% Load + vectorize Excel
+@st.cache_resource
+def load_vectorstore():
+    df = pd.read_excel("Stammdata.xlsx")
+
+    docs = []
+    for _, row in df.iterrows():
+        name = row.get("Name") or row.get("Product Name")
+
+        text = f"""
+        Produktname: {name}
+        Kultivar: {row.get("Kultivar")}
+        Sorte: {row.get("Sorte")}
+
+        THC: {row.get("THC in Prozent")} %
+        CBD: {row.get("CBD in Prozent")} %
+
+        Effekte: {row.get("Kategorie Effekt 1")}, {row.get("Kategorie Effekt 2")}, {row.get("Kategorie Effekt 3")}
+        Medizinische Wirkung: {row.get("Medizinische Wirkung 1")}, {row.get("Medizinische Wirkung 2")}, {row.get("Medizinische Wirkung 3")}
+
+        Aroma: {row.get("Aroma 1")}, {row.get("Aroma 2")}, {row.get("Aroma 3")}
+        Terpene: {row.get("Terpene 1")}, {row.get("Terpene 2")}, {row.get("Terpene 3")}
+
+        Hersteller: {row.get("Hersteller") or row.get("producer name")}
+        Herkunftsland: {row.get("Herkunftsland")}
+        Bestrahlt: {row.get("Bestrahlt")}
+        """
+
+        docs.append(Document(page_content=text))
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    return FAISS.from_documents(docs, embeddings)
+
+vectorstore = load_vectorstore()
+
+# %% LLM
 llm = ChatGroq(
-    model=MODEL_NAME,
+    model="openai/gpt-oss-20b",
+    temperature=0,
     api_key=os.getenv("GROQ_API_KEY"),
-    temperature=0
 )
 
-#%% Output schema
-class CannabisOutput(BaseModel):
-    strain_name: str
-    type: str = Field(description="Indica, Sativa, or Hybrid")
-    thc_percent: float
-    cbd_percent: float
-    effects: list[str]
-    medical_uses: list[str]
-    warnings: list[str]
-
-parser = PydanticOutputParser(pydantic_object=CannabisOutput)
-
-#%% Prompt
-# prompt
-messages = [
-    ("system", "You are a cannabis expert. Use schema {format_instructions}"),
-    ("user", "{question}")
-]
-
-prompt_template = ChatPromptTemplate.from_messages(messages).partial(
-    format_instructions=parser.get_format_instructions()
+# %% RAG chain
+qa = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
+    chain_type="stuff",
 )
 
-# model
-model = ChatGroq(model="openai/gpt-oss-20b")
+# %% Query
+question = st.text_input("Ask about strains, effects, THC/CBD, medical use")
 
-#%% Chain
-chain = prompt_template | model | parser
+if question:
+    with st.spinner("Searching vector database..."):
+        answer = qa.run(question)
 
-#%% Chat input
-user_input = st.chat_input("Ask about a cannabis strain...")
-
-if user_input:
-    with st.spinner("Thinking..."):
-        try:
-            result = chain.invoke({"question": user_input})
-            st.json(result.model_dump())
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-#%%
+    st.subheader("Answer")
+    st.write(answer)
